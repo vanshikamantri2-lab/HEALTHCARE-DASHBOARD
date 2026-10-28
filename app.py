@@ -176,16 +176,20 @@ st.markdown("---")
 # --------------------------------------------------------------------------------
 # TABS
 # --------------------------------------------------------------------------------
-tab_age, tab_disease, tab_bmi, tab_bp, tab_gender, tab_data = st.tabs(
+
+tab_age, tab_disease, tab_bmi, tab_bp, tab_gender, tab_risk, tab_anomaly, tab_data = st.tabs(
     [
         "📊 Age Distribution",
         "🦠 Disease Distribution",
         "⚖️ BMI Analysis",
         "❤️ Blood Pressure",
         "🚻 Gender Analysis",
+        "🩺 Patient Risk Assessment",
+        "🔍 Anomaly Detection",
         "📄 Raw Data",
     ]
 )
+
 
 # ---------------- AGE DISTRIBUTION ----------------
 with tab_age:
@@ -372,7 +376,423 @@ with tab_gender:
         )
         st.plotly_chart(fig4, use_container_width=True)
 
+# ---------------- PATIENT RISK ASSESSMENT ----------------
+with tab_risk:
+    st.subheader("🩺 Patient Risk Assessment")
+    st.caption(
+          "A transparent rule-based screening score using age, BMI, blood pressure, "
+    "and recorded health conditions. This is for analytics and educational "
+    "purposes only and is not a medical diagnosis."
+)
+with st.expander("ℹ️ How is the risk score calculated?"):
+    st.markdown("""
+    **Risk factors considered:**
+
+    - **Age:** Higher scores for older age groups.
+    - **BMI:** Additional points for overweight or obese categories.
+    - **Blood Pressure:** Points increase with the BP category.
+    - **Existing Condition:** An additional point is assigned when a recorded
+      health condition is present.
+
+    **Risk interpretation:**
+
+    - 🟢 **Low Risk:** Score below 3
+    - 🟡 **Moderate Risk:** Score 3–4
+    - 🔴 **High Risk:** Score 5 or above
+
+    This scoring system is a project-defined rule-based screening mechanism
+    and should not be interpreted as a clinical risk prediction model.
+    """)
+
+    # Work on a copy so the original filtered dataset remains unchanged
+    risk_df = filtered_df.copy()
+
+    # Create a transparent risk score
+    def calculate_risk(row):
+        score = 0
+        factors = []
+
+        # Age factor
+        if row["Age"] >= 65:
+            score += 2
+            factors.append("Age ≥ 65")
+        elif row["Age"] >= 50:
+            score += 1
+            factors.append("Age 50–64")
+
+        # BMI factor
+        if row["BMI_Category"] == "Obese":
+            score += 2
+            factors.append("Obese BMI")
+        elif row["BMI_Category"] == "Overweight":
+            score += 1
+            factors.append("Overweight BMI")
+
+        # Blood pressure factor
+        if row["BP_Category"] == "Hypertensive Crisis":
+            score += 3
+            factors.append("Hypertensive Crisis")
+        elif row["BP_Category"] == "Hypertension Stage 2":
+            score += 3
+            factors.append("Stage 2 Hypertension")
+        elif row["BP_Category"] == "Hypertension Stage 1":
+            score += 2
+            factors.append("Stage 1 Hypertension")
+        elif row["BP_Category"] == "Elevated":
+            score += 1
+            factors.append("Elevated BP")
+
+        # Disease factor
+        disease = str(row["Disease"]).strip().lower()
+        if disease not in ["none", "no disease", "healthy", "nan", ""]:
+            score += 1
+            factors.append("Existing condition")
+
+        # Convert score into risk category
+        if score >= 5:
+            risk = "High"
+        elif score >= 3:
+            risk = "Moderate"
+        else:
+            risk = "Low"
+
+        return pd.Series([score, risk, ", ".join(factors) if factors else "No major risk factors"])
+
+    risk_df[["Risk_Score", "Risk_Level", "Risk_Factors"]] = risk_df.apply(
+        calculate_risk, axis=1
+    )
+
+    # ---------------- RISK KPIs ----------------
+    st.markdown("### 📌 Risk Overview")
+
+    r1, r2, r3, r4 = st.columns(4)
+
+    total_risk_patients = len(risk_df)
+    low_count = (risk_df["Risk_Level"] == "Low").sum()
+    moderate_count = (risk_df["Risk_Level"] == "Moderate").sum()
+    high_count = (risk_df["Risk_Level"] == "High").sum()
+
+    r1.metric("Patients Assessed", total_risk_patients)
+    r2.metric("Low Risk", low_count)
+    r3.metric("Moderate Risk", moderate_count)
+    r4.metric("High Risk", high_count)
+
+    st.markdown("---")
+
+    # ---------------- RISK DISTRIBUTION ----------------
+    c1, c2 = st.columns(2)
+
+    with c1:
+        risk_counts = (
+            risk_df["Risk_Level"]
+            .value_counts()
+            .reindex(["Low", "Moderate", "High"], fill_value=0)
+            .reset_index()
+        )
+        risk_counts.columns = ["Risk Level", "Count"]
+
+        fig_risk = px.bar(
+            risk_counts,
+            x="Risk Level",
+            y="Count",
+            color="Risk Level",
+            title="Patient Risk Distribution",
+        )
+
+        st.plotly_chart(fig_risk, use_container_width=True)
+
+    with c2:
+        fig_risk_pie = px.pie(
+            risk_counts,
+            values="Count",
+            names="Risk Level",
+            title="Risk Level Share",
+            hole=0.45,
+        )
+
+        st.plotly_chart(fig_risk_pie, use_container_width=True)
+
+    # ---------------- PATIENT SELECTION ----------------
+    st.markdown("### 👤 Individual Patient Assessment")
+
+    if "PatientID" in risk_df.columns:
+        patient_options = risk_df["PatientID"].astype(str).tolist()
+        selected_patient = st.selectbox(
+            "Select a Patient",
+            patient_options
+        )
+
+        selected_row = risk_df[
+            risk_df["PatientID"].astype(str) == selected_patient
+        ].iloc[0]
+    else:
+        patient_options = risk_df.index.tolist()
+        selected_patient = st.selectbox(
+            "Select Patient Record",
+            patient_options
+        )
+
+        selected_row = risk_df.loc[selected_patient]
+
+    p1, p2, p3, p4 = st.columns(4)
+
+    p1.metric("Age", f"{selected_row['Age']:.0f}")
+    p2.metric("BMI", f"{selected_row['BMI']:.1f}")
+    p3.metric(
+        "Blood Pressure",
+        f"{selected_row['Systolic_BP']:.0f}/{selected_row['Diastolic_BP']:.0f}"
+    )
+    p4.metric("Risk Score", f"{selected_row['Risk_Score']:.0f}")
+
+    st.markdown("#### Risk Result")
+
+    risk_level = selected_row["Risk_Level"]
+
+    if risk_level == "High":
+        st.error(f"🔴 **Risk Level: {risk_level}**")
+    elif risk_level == "Moderate":
+        st.warning(f"🟡 **Risk Level: {risk_level}**")
+    else:
+        st.success(f"🟢 **Risk Level: {risk_level}**")
+
+    st.info(
+        f"**Risk Factors:** {selected_row['Risk_Factors']}"
+    )
+
+    # ---------------- RISK-BASED RECOMMENDATIONS ----------------
+    st.markdown("### 💡 General Health Recommendations")
+
+    bmi_category = selected_row["BMI_Category"]
+    bp_category = selected_row["BP_Category"]
+
+    # Overall risk message
+    if risk_level == "High":
+        st.error(
+            "🔴 **High Risk:** Multiple health indicators require attention. "
+            "Professional medical evaluation is recommended."
+        )
+
+    elif risk_level == "Moderate":
+        st.warning(
+            "🟡 **Moderate Risk:** Some health indicators require attention. "
+            "Consider improving lifestyle habits and monitoring your health regularly."
+        )
+
+    else:
+        st.success(
+            "🟢 **Low Risk:** No major risk indicators were detected based on "
+            "the available information. Continue healthy lifestyle habits."
+        )
+
+    # ---------------- SUGGESTED ACTIONS ----------------
+    st.markdown("#### 💡 Suggested Actions")
+
+    if bmi_category == "Obese":
+        st.info(
+            "💡 **BMI:** Your BMI falls in the obese category. "
+            "Consider professional guidance for sustainable weight management."
+        )
+
+    elif bmi_category == "Overweight":
+        st.info(
+            "💡 **BMI:** Your BMI falls in the overweight category. "
+            "A balanced diet and regular physical activity may be beneficial."
+        )
+
+    elif bmi_category == "Underweight":
+        st.info(
+            "💡 **BMI:** Your BMI falls in the underweight category. "
+            "Consider discussing healthy nutrition and weight management "
+            "with a healthcare professional."
+        )
+
+    # Blood pressure recommendations
+    if bp_category == "Elevated":
+        st.info(
+            "💡 **Blood Pressure:** Blood pressure is elevated. "
+            "Regular monitoring and healthy lifestyle habits may be beneficial."
+        )
+
+    elif bp_category == "Hypertension Stage 1":
+        st.info(
+            "💡 **Blood Pressure:** Blood pressure falls in Stage 1 hypertension. "
+            "Regular monitoring and professional medical advice are recommended."
+        )
+
+    elif bp_category == "Hypertension Stage 2":
+        st.info(
+            "💡 **Blood Pressure:** Blood pressure falls in Stage 2 hypertension. "
+            "Medical evaluation and regular monitoring are recommended."
+        )
+
+    elif bp_category == "Hypertensive Crisis":
+        st.error(
+            "🚨 **Blood Pressure:** Blood pressure is in a very high range. "
+            "Prompt medical attention is recommended, especially if symptoms "
+            "are present."
+        )
+
+    # Existing condition recommendation
+    disease = str(selected_row["Disease"]).strip().lower()
+
+    if disease not in ["none", "no disease", "healthy", "nan", ""]:
+        st.info(
+            "💡 **Existing Condition:** A health condition is recorded. "
+            "Follow the care plan provided by the patient's healthcare professional."
+        )
+
+    # Age recommendation
+    if selected_row["Age"] >= 65:
+        st.info(
+            "💡 **Age:** Regular health monitoring is advisable for older adults."
+        )
+
+    # ---------------- RISK TABLE ----------------
+    st.markdown("### 📋 Patient Risk Summary")
+
+    display_columns = []
+
+    for col in [
+        "PatientID",
+        "Age",
+        "Gender",
+        "BMI",
+        "BMI_Category",
+        "Systolic_BP",
+        "Diastolic_BP",
+        "BP_Category",
+        "Disease",
+        "Risk_Score",
+        "Risk_Level",
+        "Risk_Factors",
+    ]:
+        if col in risk_df.columns:
+            display_columns.append(col)
+
+    st.dataframe(
+        risk_df[display_columns],
+        use_container_width=True,
+        hide_index=True,
+    )
+# ---------------- ANOMALY DETECTION ----------------
+with tab_anomaly:
+    st.subheader("🔍 Patient Anomaly Detection")
+    st.caption(
+        "Isolation Forest identifies unusual combinations of patient measurements "
+        "for review. It does not diagnose diseases."
+    )
+
+    from sklearn.ensemble import IsolationForest
+
+    features = ["Age", "BMI", "Systolic_BP", "Diastolic_BP"]
+    anomaly_df = filtered_df.copy()
+
+    # Convert measurements to numeric values; invalid entries become missing.
+    for col in features:
+        anomaly_df[col] = pd.to_numeric(anomaly_df[col], errors="coerce")
+
+    # Only analyze records with all required measurements available.
+    valid_df = anomaly_df.dropna(subset=features).copy()
+
+    if len(valid_df) < 5:
+        st.warning(
+            "At least 5 records with complete numeric measurements are required "
+            "for anomaly detection."
+        )
+    else:
+        contamination = st.slider(
+            "Expected proportion of unusual records",
+            min_value=0.01,
+            max_value=0.20,
+            value=0.05,
+            step=0.01,
+            help=(
+                "Controls the approximate proportion of records the model flags. "
+                "It is not a disease probability or measured disease rate."
+            ),
+        )
+
+        model = IsolationForest(
+            n_estimators=100,
+            contamination=contamination,
+            random_state=42,
+        )
+        predictions = model.fit_predict(valid_df[features])
+        valid_df["Anomaly_Status"] = [
+            "Unusual — Review" if prediction == -1 else "Normal"
+            for prediction in predictions
+        ]
+        valid_df["Anomaly_Score"] = model.decision_function(valid_df[features])
+
+        flagged_df = valid_df[
+            valid_df["Anomaly_Status"] == "Unusual — Review"
+        ].copy()
+
+        metric1, metric2, metric3 = st.columns(3)
+        metric1.metric("Records Analyzed", f"{len(valid_df):,}")
+        metric2.metric("Flagged Records", f"{len(flagged_df):,}")
+        metric3.metric(
+            "Flagged Percentage",
+            f"{len(flagged_df) / len(valid_df) * 100:.1f}%",
+        )
+
+        st.markdown("### 📊 Anomaly Visualization")
+        hover_columns = [
+            col for col in ["PatientID", "Age", "Diastolic_BP", "Disease"]
+            if col in valid_df.columns
+        ]
+        fig_anomaly = px.scatter(
+            valid_df,
+            x="BMI",
+            y="Systolic_BP",
+            color="Anomaly_Status",
+            hover_data=hover_columns,
+            title="BMI vs Systolic Blood Pressure",
+            color_discrete_map={
+                "Normal": PRIMARY_COLOR,
+                "Unusual — Review": ACCENT_COLOR,
+            },
+        )
+        st.plotly_chart(fig_anomaly, use_container_width=True)
+
+        st.markdown("### 🚩 Flagged Patient Records")
+        if flagged_df.empty:
+            st.success("No records were flagged in this run.")
+        else:
+            display_anomaly_cols = [
+                col for col in [
+                    "PatientID", "Age", "Gender", "BMI", "Systolic_BP",
+                    "Diastolic_BP", "Disease", "Anomaly_Status", "Anomaly_Score",
+                ]
+                if col in flagged_df.columns
+            ]
+            st.dataframe(
+                flagged_df[display_anomaly_cols],
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.download_button(
+                "⬇️ Download Flagged Records",
+                data=flagged_df.to_csv(index=False).encode("utf-8"),
+                file_name="patient_anomalies.csv",
+                mime="text/csv",
+            )
+
+        st.info(
+            "Flagged records have unusual statistical patterns. This does not "
+            "necessarily mean the data is incorrect or that a patient is ill. "
+            "Review records before taking action."
+        )
+
+        excluded_count = len(anomaly_df) - len(valid_df)
+        if excluded_count:
+            st.warning(
+                f"{excluded_count} record(s) were excluded because one or more "
+                "measurements were missing or non-numeric."
+            )
+
 # ---------------- RAW DATA ----------------
+
 with tab_data:
     st.subheader("Filtered Patient Data")
     st.dataframe(filtered_df, use_container_width=True)
